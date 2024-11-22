@@ -6,7 +6,16 @@ import { Button } from './ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from './ui/card';
 
 const TrainingControls: React.FC = () => {
-  const { config, updateConfig, startTraining, stopTraining, isTraining, metrics } = useNetwork();
+  const { 
+    config, 
+    updateConfig, 
+    startTraining, 
+    stopTraining, 
+    isTraining, 
+    metrics,
+    maxEpochs,
+    setMaxEpochs
+  } = useNetwork();
 
   return (
     <Card>
@@ -52,17 +61,30 @@ const TrainingControls: React.FC = () => {
               min={0.001}
             />
           </div>
+          <div className="flex flex-row items-center gap-2">
+            <Label className="text-sm font-semibold w-48">Max Epochs:</Label>
+            <Input
+              type="number"
+              value={maxEpochs}
+              onChange={(e) => setMaxEpochs(parseInt(e.target.value))}
+              min={1}
+            />
+          </div>
         </div>
 
         <div className="flex flex-row justify-between gap-2">
-          <div className="flex flex-col gap-2">
-            <div className="flex flex-row items-center gap-4">
-              <Label className="text-sm font-semibold">Loss:</Label> 
-              {metrics.loss.toFixed(4)}
-              <Label className="text-sm font-semibold">Accuracy:</Label> 
-              {metrics.accuracy ? `${(metrics.accuracy * 100).toFixed(1)}%` : 'N/A'}
-              <Label className="text-sm font-semibold">Epoch:</Label> 
-              {metrics.epoch}
+          <div className="grid grid-cols-3 gap-8">
+            <div className="flex flex-col items-start">
+              <Label className="text-sm font-semibold">Loss:</Label>
+              <span className="w-16">{metrics.loss.toFixed(4)}</span>
+            </div>
+            <div className="flex flex-col items-start">
+              <Label className="text-sm font-semibold">Accuracy:</Label>
+              <span className="w-16">{metrics.accuracy ? `${(metrics.accuracy * 100).toFixed(1)}%` : 'N/A'}</span>
+            </div>
+            <div className="flex flex-col items-start">
+              <Label className="text-sm font-semibold">Epoch:</Label>
+              <span className="w-16">{metrics.epoch} / {maxEpochs}</span>
             </div>
           </div>
 

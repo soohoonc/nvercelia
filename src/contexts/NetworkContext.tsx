@@ -13,9 +13,13 @@ interface NetworkContextType {
   networkState: NetworkState | null;
   metrics: TrainingMetrics;
   isTraining: boolean;
+  maxEpochs: number;
   updateConfig: (newConfig: Partial<NeuralNetworkConfig>) => void;
+  setMaxEpochs: (epochs: number) => void;
   startTraining: () => Promise<void>;
   stopTraining: () => void;
+  sampleHistory: SampleHistory[];
+  epochMetrics: EpochMetrics[];
 }
 
 const NetworkContext = createContext<NetworkContextType | undefined>(undefined);
@@ -31,12 +35,22 @@ export const NetworkProvider: React.FC<{ children: React.ReactNode }> = ({ child
   const [networkState, setNetworkState] = useState<NetworkState | null>(null);
   const [metrics, setMetrics] = useState<TrainingMetrics>({ loss: 0, epoch: 0 });
   const [isTraining, setIsTraining] = useState(false);
+  const [maxEpochs, setMaxEpochs] = useState<number>(10);
+  const [sampleHistory, setSampleHistory] = useState<SampleHistory[]>([]);
+  const [epochMetrics, setEpochMetrics] = useState<EpochMetrics[]>([]);
   
   // Refs to hold WebGPU resources
   const deviceRef = useRef<GPUDevice | null>(null);
   const buffersRef = useRef<ReturnType<typeof createBuffers> | null>(null);
   const pipelinesRef = useRef<ReturnType<typeof createNeuralNetworkPipeline> | null>(null);
   const animationFrameRef = useRef<number | null>(null);
+
+  // Add a ref to track current training sample
+  const currentSampleRef = useRef(0);
+
+  // Add state to track total samples processed
+  const samplesProcessedRef = useRef(0);
+  const epochCompletedRef = useRef(0);
 
   const initializeNetwork = useCallback(async () => {
     try {
@@ -69,7 +83,6 @@ export const NetworkProvider: React.FC<{ children: React.ReactNode }> = ({ child
     }
   }, [config]);
 
-  // Improved training data generation with batching
   const generateTrainingData = useCallback(() => {
     // XOR truth table
     const xorData = [
@@ -79,17 +92,50 @@ export const NetworkProvider: React.FC<{ children: React.ReactNode }> = ({ child
       { input: [1, 1], target: [0] }
     ];
 
-    // Randomly select a batch of data
-    const batchIndex = Math.floor(Math.random() * xorData.length);
-    const sample = xorData[batchIndex];
+    // Get current sample
+    const sampleIndex = samplesProcessedRef.current % xorData.length;
+    const sample = xorData[sampleIndex];
+    
+    console.log('Current training state:', {
+      samplesProcessed: samplesProcessedRef.current,
+      sampleIndex,
+      epochsCompleted: epochCompletedRef.current,
+      currentEpoch: Math.floor(samplesProcessedRef.current / 4),
+      maxEpochs
+    });
+    
+    // Increment counter
+    samplesProcessedRef.current += 1;
+    
+    // Check if we completed an epoch
+    if (sampleIndex === xorData.length - 1) {
+      epochCompletedRef.current += 1;
+      console.log(`Completed epoch ${epochCompletedRef.current}`);
+    }
 
     return {
       inputData: new Float32Array(sample.input),
       targetData: new Float32Array(sample.target)
     };
+  }, [maxEpochs]);
+
+  let stopTraining = useCallback(() => {
+    setIsTraining(false);
+    if (animationFrameRef.current !== null) {
+      cancelAnimationFrame(animationFrameRef.current);
+      animationFrameRef.current = null;
+    }
   }, []);
 
+
   const trainingLoop = useCallback(async () => {
+    console.log('Training loop started', {
+      hasDevice: !!deviceRef.current,
+      hasBuffers: !!buffersRef.current,
+      hasPipelines: !!pipelinesRef.current,
+      isTraining
+    });
+
     if (!deviceRef.current || !buffersRef.current || !pipelinesRef.current) {
       console.log('Missing required resources:', {
         hasDevice: !!deviceRef.current,
@@ -100,14 +146,20 @@ export const NetworkProvider: React.FC<{ children: React.ReactNode }> = ({ child
     }
 
     try {
-      // Generate new training data for each iteration
+      const currentEpoch = Math.floor(samplesProcessedRef.current / 4);
+      console.log('Current epoch:', currentEpoch, 'max epochs:', maxEpochs);
+      
+      // Check if we've reached max epochs
+      if (currentEpoch >= maxEpochs) {
+        console.log('Reached max epochs, stopping training');
+        stopTraining();
+        return;
+      }
+
+      console.log('Generating training data...');
       const { inputData, targetData } = generateTrainingData();
 
-      console.log('Training iteration with:', {
-        input: Array.from(inputData),
-        target: Array.from(targetData)
-      });
-
+      console.log('Running training iteration...');
       const result = await trainNetwork(
         deviceRef.current,
         buffersRef.current,
@@ -116,73 +168,93 @@ export const NetworkProvider: React.FC<{ children: React.ReactNode }> = ({ child
         inputData,
         targetData
       );
-
-      console.log('Training result:', result);
+      console.log('Training iteration complete:', result);
 
       // Update network state
-      setNetworkState(prev => {
-        if (!prev) return null;
-        return {
-          ...prev,
-          inputLayer: Array.from(inputData),
-          hiddenLayer: Array.from(result.hiddenLayer),
-          outputLayer: Array.from(result.outputLayer),
-          weights: prev.weights // Keep existing weights
-        };
-      });
+      setNetworkState(prev => ({
+        ...prev!,
+        inputLayer: Array.from(inputData),
+        hiddenLayer: Array.from(result.hiddenLayer),
+        outputLayer: Array.from(result.outputLayer),
+        weights: prev!.weights
+      }));
 
       // Update metrics
       setMetrics(prev => ({
         ...prev,
         loss: result.loss,
         accuracy: result.accuracy,
-        epoch: prev.epoch + 1
+        epoch: Math.floor(samplesProcessedRef.current / 4)
       }));
 
-      // Schedule next iteration with a delay
+      // Add to sample history
+      setSampleHistory(prev => [...prev, {
+        epoch: Math.floor(samplesProcessedRef.current / 4),
+        input: Array.from(inputData),
+        target: targetData[0],
+        prediction: result.outputLayer[0],
+        loss: result.loss
+      }]);
+
+      // If we completed an epoch, add to epoch metrics
+      if (samplesProcessedRef.current % 4 === 0) {
+        setEpochMetrics(prev => [...prev, {
+          epoch: Math.floor(samplesProcessedRef.current / 4),
+          loss: result.loss,
+          accuracy: result.accuracy
+        }]);
+      }
+
+      // Schedule next iteration immediately if still training
       if (isTraining) {
-        animationFrameRef.current = window.setTimeout(() => {
-          requestAnimationFrame(trainingLoop);
-        }, 100);
+        // Use requestAnimationFrame directly instead of setTimeout
+        animationFrameRef.current = requestAnimationFrame(trainingLoop);
       }
     } catch (error) {
       console.error('Training error:', error);
       stopTraining();
     }
-  }, [config, isTraining, generateTrainingData]);
+  }, [config, generateTrainingData, maxEpochs, stopTraining]);
 
   const startTraining = useCallback(async () => {
-    console.log('startTraining');
     try {
-      console.log('networkState', networkState);
+      console.log('Starting training...');
       if (!networkState) {
-        console.log('Initializing network...');
         await initializeNetwork();
       }
-      console.log('Starting training...', {
-        hasDevice: !!deviceRef.current,
-        hasBuffers: !!buffersRef.current,
-        hasPipelines: !!pipelinesRef.current
-      });
       
+      // Reset counters
+      samplesProcessedRef.current = 0;
+      epochCompletedRef.current = 0;
+      setMetrics({ loss: 0, epoch: 0 });
+      
+      // Create a ref to track training state
+      const isTrainingRef = { current: true };
       setIsTraining(true);
-      requestAnimationFrame(() => {
-        console.log('Training loop starting with isTraining:', isTraining);
-        trainingLoop();
-      });
+      
+      console.log('Starting animation frame loop...');
+      
+      async function animate() {
+        if (!isTrainingRef.current) return;
+        
+        await trainingLoop();
+        animationFrameRef.current = requestAnimationFrame(animate);
+      }
+      
+      animationFrameRef.current = requestAnimationFrame(animate);
+      
+      // Update the stopTraining function to use the ref
+      const originalStopTraining = stopTraining;
+      stopTraining = () => {
+        isTrainingRef.current = false;
+        originalStopTraining();
+      };
+      
     } catch (error) {
       console.error('Error starting training:', error);
       setIsTraining(false);
     }
-  }, [initializeNetwork, networkState, trainingLoop, isTraining]);
-
-  const stopTraining = useCallback(() => {
-    setIsTraining(false);
-    if (animationFrameRef.current) {
-      clearTimeout(animationFrameRef.current);
-      animationFrameRef.current = null;
-    }
-  }, []);
+  }, [initializeNetwork, networkState, trainingLoop]);
 
   const updateConfig = useCallback((newConfig: Partial<NeuralNetworkConfig>) => {
     setConfig((prev: NeuralNetworkConfig) => ({ ...prev, ...newConfig }));
@@ -213,9 +285,13 @@ export const NetworkProvider: React.FC<{ children: React.ReactNode }> = ({ child
         networkState,
         metrics,
         isTraining,
+        maxEpochs,
         updateConfig,
+        setMaxEpochs,
         startTraining,
-        stopTraining
+        stopTraining,
+        sampleHistory,
+        epochMetrics,
       }}
     >
       {children}

@@ -68,11 +68,23 @@ export const createNeuralNetworkPipeline = (
       let neuronId = global_id.x;
       let learning_rate = ${config.learningRate}f;
 
-      // Calculate output layer gradients
+      // Reset loss at the start for the first thread only
+      if (neuronId == 0u) {
+        loss[0] = 0.0;
+      }
+
+      // Ensure all threads see the reset loss
+      workgroupBarrier();
+
+      // Calculate output layer gradients and loss
       if (neuronId < ${config.outputSize}u) {
         let error = outputLayer[neuronId] - targetOutput[neuronId];
         outputGradients[neuronId] = error * outputLayer[neuronId] * (1.0 - outputLayer[neuronId]);
         
+        // Calculate MSE loss for this neuron
+        let squared_error = error * error;
+        atomicAdd(&loss[0], squared_error);  // Accumulate loss
+
         // Update output weights and biases
         for (var i = 0u; i < ${config.hiddenSize}u; i = i + 1u) {
           let weightIndex = i * ${config.outputSize}u + neuronId;
@@ -97,16 +109,6 @@ export const createNeuralNetworkPipeline = (
           weightsHidden[weightIndex] = weightsHidden[weightIndex] - delta;
         }
         biasHidden[neuronId] = biasHidden[neuronId] - learning_rate * hiddenGradients[neuronId];
-      }
-
-      // Calculate loss (MSE)
-      if (neuronId == 0u) {
-        var totalLoss = 0.0;
-        for (var i = 0u; i < ${config.outputSize}u; i = i + 1u) {
-          let error = outputLayer[i] - targetOutput[i];
-          totalLoss = totalLoss + error * error;
-        }
-        loss[0] = totalLoss / ${config.outputSize}f;
       }
     }
   `;
@@ -303,8 +305,17 @@ export const trainNetwork = async (
   forwardPass.dispatchWorkgroups(Math.max(config.hiddenSize, config.outputSize));
   forwardPass.end();
 
-  // Backward pass
-  const backwardPass = commandEncoder.beginComputePass();
+  // Submit forward pass and wait for completion
+  device.queue.submit([commandEncoder.finish()]);
+  await device.queue.onSubmittedWorkDone();
+
+  // Read output after forward pass
+  const outputBeforeBackward = await readBuffer(device, buffers.outputLayerBuffer, config.outputSize);
+  console.log('Output before backward:', Array.from(outputBeforeBackward));
+
+  // New command encoder for backward pass
+  const backwardEncoder = device.createCommandEncoder();
+  const backwardPass = backwardEncoder.beginComputePass();
   backwardPass.setPipeline(pipelines.backwardPipeline);
   backwardPass.setBindGroup(0, device.createBindGroup({
     layout: pipelines.backwardPipeline.getBindGroupLayout(0),
@@ -325,28 +336,34 @@ export const trainNetwork = async (
   backwardPass.dispatchWorkgroups(Math.max(config.hiddenSize, config.outputSize));
   backwardPass.end();
 
-  // Submit commands
-  device.queue.submit([commandEncoder.finish()]);
+  // Submit backward pass and wait for completion
+  device.queue.submit([backwardEncoder.finish()]);
+  await device.queue.onSubmittedWorkDone();
 
   // Read results
   const loss = await readBuffer(device, buffers.lossBuffer, 1);
   const outputLayer = await readBuffer(device, buffers.outputLayerBuffer, config.outputSize);
   const hiddenLayer = await readBuffer(device, buffers.hiddenLayerBuffer, config.hiddenSize);
 
+  // Calculate MSE loss
+  const mse = loss[0] / config.outputSize;
+
   // Calculate accuracy
   const prediction = outputLayer[0] > 0.5 ? 1 : 0;
   const accuracy = prediction === targetData[0] ? 1 : 0;
 
-  console.log('Training iteration results:', {
-    loss: loss[0],
-    output: Array.from(outputLayer),
-    prediction,
+  console.log('Training iteration details:', {
+    input: Array.from(inputData),
     target: targetData[0],
+    outputBefore: Array.from(outputBeforeBackward),
+    outputAfter: Array.from(outputLayer),
+    prediction,
+    mse,
     accuracy
   });
 
   return {
-    loss: loss[0],
+    loss: mse,
     accuracy,
     outputLayer,
     hiddenLayer,

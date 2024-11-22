@@ -23,4 +23,18 @@ interface NetworkState {
   hiddenLayer: number[];
   outputLayer: number[];
   weights: NetworkWeights;
-} 
+}
+
+interface SampleHistory {
+  epoch: number;
+  input: number[];
+  target: number;
+  prediction: number;
+  loss: number;
+}
+
+interface EpochMetrics {
+  epoch: number;
+  loss: number;
+  accuracy: number;
+}
