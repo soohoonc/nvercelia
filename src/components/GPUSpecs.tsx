@@ -103,7 +103,7 @@ const GPUSpecs: React.FC = () => {
             <span className="font-bold">Description:</span> {gpuInfo.description || 'Unknown'}
           </div>
           <div>
-            <span className="font-bold">Vendor:</span> {gpuInfo.vendor === 'nvidia' ? 'NVIDIA!!!' : `${gpuInfo.vendor} (could be NVIDIA!)` || 'Unknown'}
+            <span className="font-bold">Vendor:</span> {gpuInfo.vendor || 'Unknown'}
           </div>
           <div>
             <span className="font-bold">Architecture:</span> {gpuInfo.architecture || 'Unknown'}
