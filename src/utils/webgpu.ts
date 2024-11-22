@@ -68,22 +68,21 @@ export const createNeuralNetworkPipeline = (
       let neuronId = global_id.x;
       let learning_rate = ${config.learningRate}f;
 
-      // Reset loss at the start for the first thread only
-      if (neuronId == 0u) {
-        loss[0] = 0.0;
-      }
-
-      // Ensure all threads see the reset loss
-      workgroupBarrier();
-
-      // Calculate output layer gradients and loss
+      // Calculate output layer gradients
       if (neuronId < ${config.outputSize}u) {
-        let error = outputLayer[neuronId] - targetOutput[neuronId];
-        outputGradients[neuronId] = error * outputLayer[neuronId] * (1.0 - outputLayer[neuronId]);
+        let predicted = outputLayer[neuronId];
+        let target = targetOutput[neuronId];
         
-        // Calculate MSE loss for this neuron
-        let squared_error = error * error;
-        atomicAdd(&loss[0], squared_error);  // Accumulate loss
+        // Calculate error
+        let error = predicted - target;
+        
+        // Store error in loss buffer for reading later
+        if (neuronId == 0u) {
+          loss[0] = error;  // Store raw error, not squared
+        }
+        
+        // Calculate gradient
+        outputGradients[neuronId] = 2.0 * error * sigmoid_derivative(predicted);
 
         // Update output weights and biases
         for (var i = 0u; i < ${config.hiddenSize}u; i = i + 1u) {
@@ -92,23 +91,6 @@ export const createNeuralNetworkPipeline = (
           weightsOutput[weightIndex] = weightsOutput[weightIndex] - delta;
         }
         biasOutput[neuronId] = biasOutput[neuronId] - learning_rate * outputGradients[neuronId];
-      }
-
-      // Calculate hidden layer gradients
-      if (neuronId < ${config.hiddenSize}u) {
-        var sum = 0.0;
-        for (var i = 0u; i < ${config.outputSize}u; i = i + 1u) {
-          sum = sum + outputGradients[i] * weightsOutput[neuronId * ${config.outputSize}u + i];
-        }
-        hiddenGradients[neuronId] = sum * hiddenLayer[neuronId] * (1.0 - hiddenLayer[neuronId]);
-
-        // Update hidden weights and biases
-        for (var i = 0u; i < ${config.inputSize}u; i = i + 1u) {
-          let weightIndex = i * ${config.hiddenSize}u + neuronId;
-          let delta = learning_rate * hiddenGradients[neuronId] * inputData[i];
-          weightsHidden[weightIndex] = weightsHidden[weightIndex] - delta;
-        }
-        biasHidden[neuronId] = biasHidden[neuronId] - learning_rate * hiddenGradients[neuronId];
       }
     }
   `;
@@ -224,6 +206,12 @@ export const createBuffers = (
     usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC,
   });
 
+  // Add these lines to write initial weights to buffers
+  device.queue.writeBuffer(weightsHiddenBuffer, 0, weights.weightsHidden);
+  device.queue.writeBuffer(weightsOutputBuffer, 0, weights.weightsOutput);
+  device.queue.writeBuffer(biasHiddenBuffer, 0, weights.biasHidden);
+  device.queue.writeBuffer(biasOutputBuffer, 0, weights.biasOutput);
+
   return {
     inputBuffer,
     weightsHiddenBuffer,
@@ -276,6 +264,10 @@ export const trainNetwork = async (
   inputData: Float32Array,
   targetData: Float32Array
 ) => {
+  // Initialize loss buffer to zero
+  const zeroLoss = new Float32Array([0]);
+  device.queue.writeBuffer(buffers.lossBuffer, 0, zeroLoss);
+
   // Write input and target data to buffers
   device.queue.writeBuffer(buffers.inputBuffer, 0, inputData);
   device.queue.writeBuffer(buffers.targetOutputBuffer, 0, targetData);
@@ -346,24 +338,28 @@ export const trainNetwork = async (
   const hiddenLayer = await readBuffer(device, buffers.hiddenLayerBuffer, config.hiddenSize);
 
   // Calculate MSE loss
-  const mse = loss[0] / config.outputSize;
+  const prediction = outputLayer[0];
+  const target = targetData[0];
+  const error = prediction - target;
+  const mseLoss = error * error;
 
-  // Calculate accuracy
-  const prediction = outputLayer[0] > 0.5 ? 1 : 0;
-  const accuracy = prediction === targetData[0] ? 1 : 0;
+  // Calculate accuracy (threshold at 0.5 for binary classification)
+  const binaryPrediction = prediction > 0.5 ? 1 : 0;
+  const accuracy = binaryPrediction === target ? 1 : 0;
 
   console.log('Training iteration details:', {
     input: Array.from(inputData),
-    target: targetData[0],
-    outputBefore: Array.from(outputBeforeBackward),
-    outputAfter: Array.from(outputLayer),
+    target,
     prediction,
-    mse,
-    accuracy
+    binaryPrediction,
+    loss: mseLoss,
+    accuracy,
+    rawOutput: Array.from(outputLayer),
+    rawHidden: Array.from(hiddenLayer)
   });
 
   return {
-    loss: mse,
+    loss: mseLoss,
     accuracy,
     outputLayer,
     hiddenLayer,

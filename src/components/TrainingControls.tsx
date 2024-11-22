@@ -73,19 +73,23 @@ const TrainingControls: React.FC = () => {
         </div>
 
         <div className="flex flex-row justify-between gap-2">
-          <div className="grid grid-cols-3 gap-8">
+          <div className="flex flex-col gap-2">
+            <div className="grid grid-cols-3 gap-8">
             <div className="flex flex-col items-start">
               <Label className="text-sm font-semibold">Loss:</Label>
               <span className="w-16">{metrics.loss.toFixed(4)}</span>
             </div>
             <div className="flex flex-col items-start">
               <Label className="text-sm font-semibold">Accuracy:</Label>
-              <span className="w-16">{metrics.accuracy ? `${(metrics.accuracy * 100).toFixed(1)}%` : 'N/A'}</span>
+              <span className="w-16">
+                {metrics.accuracy ? `${(metrics.accuracy * 100).toFixed(1)}%` : 'N/A'}
+              </span>
             </div>
             <div className="flex flex-col items-start">
               <Label className="text-sm font-semibold">Epoch:</Label>
               <span className="w-16">{metrics.epoch} / {maxEpochs}</span>
             </div>
+          </div>
           </div>
 
           <div className="flex flex-row justify-end">

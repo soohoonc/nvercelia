@@ -21,7 +21,7 @@ const TrainingHistory: React.FC = () => {
         <CardHeader>
           <CardTitle>Sample History (Last 100)</CardTitle>
         </CardHeader>
-        <CardContent className="max-h-[600px] overflow-y-auto">
+        <CardContent className="max-h-[400px] overflow-y-auto">
           <Table>
             <TableHeader>
               <TableRow>
@@ -51,7 +51,7 @@ const TrainingHistory: React.FC = () => {
         <CardHeader>
           <CardTitle>Epoch Metrics</CardTitle>
         </CardHeader>
-        <CardContent className="max-h-[600px] overflow-y-auto">
+        <CardContent className="max-h-[400px] overflow-y-auto">
           <Table>
             <TableHeader>
               <TableRow>

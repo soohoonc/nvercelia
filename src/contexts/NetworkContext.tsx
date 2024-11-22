@@ -33,7 +33,11 @@ export const NetworkProvider: React.FC<{ children: React.ReactNode }> = ({ child
   });
 
   const [networkState, setNetworkState] = useState<NetworkState | null>(null);
-  const [metrics, setMetrics] = useState<TrainingMetrics>({ loss: 0, epoch: 0 });
+  const [metrics, setMetrics] = useState<TrainingMetrics>({ 
+    loss: 0, 
+    epoch: 0, 
+    accuracy: 0 
+  });
   const [isTraining, setIsTraining] = useState(false);
   const [maxEpochs, setMaxEpochs] = useState<number>(10);
   const [sampleHistory, setSampleHistory] = useState<SampleHistory[]>([]);
@@ -52,6 +56,11 @@ export const NetworkProvider: React.FC<{ children: React.ReactNode }> = ({ child
   const samplesProcessedRef = useRef(0);
   const epochCompletedRef = useRef(0);
 
+  // Replace state with refs for accumulation
+  const epochLossSumRef = useRef(0);
+  const epochAccuracySumRef = useRef(0);
+  const samplesInEpochRef = useRef(0);
+
   const initializeNetwork = useCallback(async () => {
     try {
       // Initialize WebGPU
@@ -67,7 +76,7 @@ export const NetworkProvider: React.FC<{ children: React.ReactNode }> = ({ child
 
       // Remove the await since createNeuralNetworkPipeline already returns a Promise
       const pipelines = createNeuralNetworkPipeline(device, config);
-      pipelinesRef.current = await pipelines;
+      pipelinesRef.current = pipelines;
 
       // Set initial network state
       setNetworkState({
@@ -196,13 +205,38 @@ export const NetworkProvider: React.FC<{ children: React.ReactNode }> = ({ child
         loss: result.loss
       }]);
 
-      // If we completed an epoch, add to epoch metrics
+      // Accumulate epoch metrics using refs
+      epochLossSumRef.current += result.loss;
+      epochAccuracySumRef.current += result.accuracy;
+      samplesInEpochRef.current += 1;
+
+      // If we completed an epoch (4 samples for XOR)
       if (samplesProcessedRef.current % 4 === 0) {
+        const epochLoss = epochLossSumRef.current / 4;
+        const epochAccuracy = epochAccuracySumRef.current / 4;
+        
         setEpochMetrics(prev => [...prev, {
           epoch: Math.floor(samplesProcessedRef.current / 4),
-          loss: result.loss,
-          accuracy: result.accuracy
+          loss: epochLoss,
+          accuracy: epochAccuracy 
         }]);
+
+        // Update current metrics
+        setMetrics({
+          loss: epochLoss,
+          epoch: Math.floor(samplesProcessedRef.current / 4),
+          accuracy: epochAccuracy
+        });
+        
+        // Reset accumulators for next epoch
+        epochLossSumRef.current = 0;
+        epochAccuracySumRef.current = 0;
+        samplesInEpochRef.current = 0;
+
+        console.log(`Epoch ${Math.floor(samplesProcessedRef.current / 4)} completed:`, {
+          loss: epochLoss,
+          accuracy: epochAccuracy
+        });
       }
 
       // Schedule next iteration immediately if still training
@@ -250,6 +284,9 @@ export const NetworkProvider: React.FC<{ children: React.ReactNode }> = ({ child
         originalStopTraining();
       };
       
+      epochLossSumRef.current = 0;
+      epochAccuracySumRef.current = 0;
+      samplesInEpochRef.current = 0;
     } catch (error) {
       console.error('Error starting training:', error);
       setIsTraining(false);
